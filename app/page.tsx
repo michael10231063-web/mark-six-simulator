@@ -49,7 +49,7 @@ function prizeTotal(wins: Wins, draw: Draw, stake: number) {
 }
 function wait(ms: number) { return new Promise<void>((resolve) => window.setTimeout(resolve, ms)); }
 function Ball({ number, extra = false, small = false, muted = false }: { number: number; extra?: boolean; small?: boolean; muted?: boolean }) {
-  return <span className={`ball ball-${ballColor(number)} ${extra ? "ball-extra" : ""} ${small ? "ball-small" : ""} ${muted ? "ball-muted" : ""}`}>{number}</span>;
+  return <span className={`ball ball-${ballColor(number)} ${extra ? "ball-extra" : ""} ${small ? "ball-small" : ""} ${muted ? "ball-muted" : ""}`}><span className="ball-number">{number}</span></span>;
 }
 function usePersistentStats() {
   const [stats, setStats] = useState<Stats>(EMPTY_STATS);
@@ -67,7 +67,7 @@ function usePersistentStats() {
 
 export default function Home() {
   const [draw, setDraw] = useState<Draw>(FALLBACK_DRAW); const [loadingDraw, setLoadingDraw] = useState(true);
-  const [quickCount, setQuickCount] = useState(1); const [stats, setStats] = usePersistentStats();
+  const [quickCount, setQuickCount] = useState(10); const [stats, setStats] = usePersistentStats();
   const [lastPicks, setLastPicks] = useState<number[][]>([]); const [lastLabel, setLastLabel] = useState("尚未投注");
   const [winnerOpen, setWinnerOpen] = useState(false); const [lastWin, setLastWin] = useState<BetResult | null>(null);
   const [alertTiers, setAlertTiers] = useState<boolean[]>(DEFAULT_ALERT_TIERS); const [lastTriggeredTier, setLastTriggeredTier] = useState(-1);
@@ -220,6 +220,7 @@ export default function Home() {
   }
   function stopAutoBet() { cancelAutoRef.current = true; }
   async function closeAutoSummary() {
+    setLastPicks([]); setLastLabel(autoSummary?.cancelled ? "自動投注已停止" : "自動投注已完成");
     setAutoSummary(null); setAutoTickets([]); setFocusedEntry(null); tierCursorRef.current = Array(7).fill(0);
     if (document.fullscreenElement) await document.exitFullscreen().catch(() => undefined);
   }
