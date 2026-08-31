@@ -44,6 +44,7 @@ export default defineConfig(async () => {
   const { cloudflare } = await import("@cloudflare/vite-plugin");
 
   return {
+    base: process.env.GITHUB_ACTIONS === "true" ? "/mark-six-simulator/" : "/",
     server: {
       host: "0.0.0.0",
       allowedHosts: ["terminal.local"],

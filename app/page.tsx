@@ -82,12 +82,15 @@ export default function Home() {
 
   const loadLatest = useCallback(async () => {
     setLoadingDraw(true);
-    try { const response = await fetch("/api/latest-result", { cache: "no-store" }); if (!response.ok) throw new Error(); setDraw(await response.json()); }
+    try {
+      const endpoint = window.location.hostname.endsWith("github.io") ? new URL("latest-result.json", window.location.href).toString() : "/api/latest-result";
+      const response = await fetch(endpoint, { cache: "no-store" }); if (!response.ok) throw new Error(); setDraw(await response.json());
+    }
     catch { setDraw(FALLBACK_DRAW); } finally { setLoadingDraw(false); }
   }, []);
   useEffect(() => {
     const timer = window.setTimeout(loadLatest, 0);
-    if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => undefined);
+    if ("serviceWorker" in navigator) navigator.serviceWorker.register(new URL("sw.js", window.location.href)).catch(() => undefined);
     return () => window.clearTimeout(timer);
   }, [loadLatest]);
   useEffect(() => {
