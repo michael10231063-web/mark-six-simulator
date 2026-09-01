@@ -78,6 +78,7 @@ export default function Home() {
   const [autoHitEntries, setAutoHitEntries] = useState<number[][]>(Array.from({ length: 7 }, () => [])); const [autoSummary, setAutoSummary] = useState<AutoSummary | null>(null);
   const [focusedEntry, setFocusedEntry] = useState<number | null>(null);
   const drawPanelRef = useRef<HTMLDivElement>(null); const autoTicketGridRef = useRef<HTMLDivElement>(null); const cancelAutoRef = useRef(false); const audioContextRef = useRef<AudioContext | null>(null);
+  const marbleAudioRef = useRef<HTMLAudioElement | null>(null); const marbleStopTimerRef = useRef<number | null>(null);
   const tierCursorRef = useRef<number[]>(Array(7).fill(0)); const focusTimerRef = useRef<number | null>(null);
 
   const loadLatest = useCallback(async () => {
@@ -107,6 +108,7 @@ export default function Home() {
   }, []);
   useEffect(() => () => {
     if (focusTimerRef.current !== null) window.clearTimeout(focusTimerRef.current);
+    if (marbleStopTimerRef.current !== null) window.clearTimeout(marbleStopTimerRef.current);
   }, []);
   useEffect(() => {
     if (!autoRunning) return;
@@ -133,29 +135,20 @@ export default function Home() {
   }, []);
 
   function playSound(kind: "spin" | "settle" | "coin") {
+    if (kind === "spin") {
+      const audio = marbleAudioRef.current ?? new Audio(new URL("sounds/marbles.mp3", window.location.href).toString());
+      marbleAudioRef.current = audio; audio.preload = "auto"; audio.volume = 0.68;
+      if (marbleStopTimerRef.current !== null) window.clearTimeout(marbleStopTimerRef.current);
+      audio.pause();
+      try { audio.currentTime = Number.isFinite(audio.duration) ? Math.random() * Math.max(0, audio.duration - DRAW_CYCLE_MS / 1000) : 0; } catch { audio.currentTime = 0; }
+      void audio.play().catch(() => undefined);
+      marbleStopTimerRef.current = window.setTimeout(() => { audio.pause(); }, DRAW_CYCLE_MS - 30);
+      return;
+    }
     const AudioCtor = window.AudioContext || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
     if (!AudioCtor) return;
     const context = audioContextRef.current ?? new AudioCtor(); audioContextRef.current = context;
     void context.resume(); const now = context.currentTime + 0.01;
-    if (kind === "spin") {
-      const collisions = [0, 0.12, 0.25, 0.39, 0.55, 0.73, 0.92];
-      const frequencies = [1180, 860, 1360, 980, 1510, 1050, 1280];
-      collisions.forEach((offset, index) => {
-        const start = now + offset; const duration = 0.075 + (index % 3) * 0.012;
-        const buffer = context.createBuffer(1, Math.ceil(context.sampleRate * duration), context.sampleRate);
-        const data = buffer.getChannelData(0);
-        for (let sample = 0; sample < data.length; sample += 1) data[sample] = (Math.random() * 2 - 1) * Math.exp(-sample / (data.length * 0.16));
-        const noise = context.createBufferSource(); const filter = context.createBiquadFilter(); const gain = context.createGain();
-        noise.buffer = buffer; filter.type = "bandpass"; filter.frequency.value = frequencies[index]; filter.Q.value = 9;
-        gain.gain.setValueAtTime(0.0001, start); gain.gain.exponentialRampToValueAtTime(0.032, start + 0.004); gain.gain.exponentialRampToValueAtTime(0.0001, start + duration);
-        noise.connect(filter).connect(gain).connect(context.destination); noise.start(start); noise.stop(start + duration);
-        const ping = context.createOscillator(); const pingGain = context.createGain();
-        ping.type = "sine"; ping.frequency.setValueAtTime(frequencies[index] * 1.55, start); ping.frequency.exponentialRampToValueAtTime(frequencies[index] * 0.92, start + duration);
-        pingGain.gain.setValueAtTime(0.0001, start); pingGain.gain.exponentialRampToValueAtTime(0.022, start + 0.003); pingGain.gain.exponentialRampToValueAtTime(0.0001, start + duration);
-        ping.connect(pingGain).connect(context.destination); ping.start(start); ping.stop(start + duration);
-      });
-      return;
-    }
     if (kind === "coin") {
       [988, 1319, 1568, 2093].forEach((frequency, index) => {
         const start = now + index * 0.065; const duration = 0.34 - index * 0.025;
@@ -311,7 +304,7 @@ export default function Home() {
       <div ref={autoTicketGridRef} className="auto-ticket-grid">{autoTickets.map((ticket) => { const winner = ticket.status === "settled" && ticket.tier >= 0; return <div data-entry={ticket.entry} className={`auto-pick-card ${ticket.status === "drawing" ? "drawing" : winner ? "winning" : "losing"} ${focusedEntry === ticket.entry ? "tier-focused" : ""}`} key={ticket.entry}><div className="ticket-meta"><span>#{ticket.entry}</span><em>{ticket.status === "drawing" ? "開彩中" : winner ? TIER_NAMES[ticket.tier] : "未中"}</em></div><div className="ticket-balls">{ticket.numbers.map((n) => <Ball key={n} number={n} small extra={winner && n === draw.extra} muted={winner && !draw.numbers.includes(n) && n !== draw.extra} />)}</div></div>; })}</div>
       <div className={`auto-footer-panel ${autoSummary ? "complete" : ""}`}><div className="auto-live-hits"><div>{alertTiers.map((enabled, index) => { if (!enabled) return null; const entries = autoSummary ? autoSummary.hitEntries[index] : autoHitEntries[index]; return <button type="button" className={`tier-jump ${entries.length ? "hit" : ""}`} disabled={!entries.length} onClick={() => jumpToTier(index, entries)} aria-label={`${TIER_NAMES[index]}，${entries.length ? `中 ${entries.length} 注，跳到下一張中獎票` : "未中"}`} key={TIER_NAMES[index]}><b>{TIER_NAMES[index]}</b>{entries.length ? `${entries.length.toLocaleString("zh-HK")}注中` : "未中"}</button>; })}</div></div>{autoSummary && <button className="primary-action" onClick={closeAutoSummary}>完成</button>}</div>
     </section>}
-    <footer><p>只供機率模擬及娛樂，並非真實投注服務。攪珠結果互相獨立，過往結果不會提高下期勝算。</p><p>只限年滿 18 歲人士。請理性娛樂。</p></footer>
+    <footer><p>只供機率模擬及娛樂，並非真實投注服務。攪珠結果互相獨立，過往結果不會提高下期勝算。</p><p>只限年滿 18 歲人士。請理性娛樂。</p><p className="sound-credit">攪珠音效：<a href="https://soundbible.com/2199-Marbles.html" target="_blank" rel="noreferrer">Marbles — Daniel Simion</a>（CC BY 3.0）</p></footer>
     <Dialog open={winnerOpen} onOpenChange={setWinnerOpen}><DialogContent className="winner-dialog"><div className="trophy-wrap"><Trophy size={36} /></div><DialogHeader><DialogTitle>恭喜中獎！</DialogTitle><DialogDescription>{lastTriggeredTier >= 0 ? `${TIER_NAMES[lastTriggeredTier]} · ` : ""}{lastWin?.label}</DialogDescription></DialogHeader><div className="winner-amount">{money(lastWin?.prize ?? 0)}</div><div className="winner-breakdown">{lastWin?.wins.map((count, i) => count > 0 && <span key={i}>{TIER_NAMES[i]} × {count.toLocaleString("zh-HK")}</span>)}</div><button className="primary-action full" onClick={() => setWinnerOpen(false)}>繼續模擬</button></DialogContent></Dialog>
   </main>;
 }
