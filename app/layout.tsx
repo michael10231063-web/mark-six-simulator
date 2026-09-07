@@ -14,5 +14,5 @@ export const metadata: Metadata = {
     apple: [{ url: `${assetBase}/apple-touch-icon.png`, sizes: "180x180", type: "image/png" }],
   },
 };
-export const viewport: Viewport = { width: "device-width", initialScale: 1, maximumScale: 1, viewportFit: "cover", themeColor: "#07152d" };
+export const viewport: Viewport = { width: "device-width", initialScale: 1, viewportFit: "cover", themeColor: "#07152d" };
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) { return <html lang="zh-HK"><body>{children}</body></html>; }
