@@ -7,30 +7,25 @@ import { AutoBetDialogContent } from "@/components/auto-bet-dialog";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import bundledHistory from "@/public/draw-history.json";
+import { drawKey, mergeDraws } from "@/lib/draw-history.mjs";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { emptyLedger, emptyStats, restoreLedger, recordResult, totalStats, validDraw, type Ledger, type SavedWin, restoreWins } from "@/lib/simulation";
 
 type Wins = [number, number, number, number, number, number, number];
-type Prize = { tier: number; dividend: number; winningUnit: number };
-type Draw = { drawNo: string; drawDate: string; numbers: number[]; extra: number; prizes: Prize[]; updatedFromOfficial: boolean; fetchedAt?: string; lastAttemptAt?: string; updateError?: boolean };
-type Stats = { entries: number; cost: number; prize: number; wins: Wins };
-type BetResult = { entries: number; cost: number; prize: number; wins: Wins; label: string; picks?: number[][] };
-type AutoProgress = { completed: number; total: number; cost: number; prize: number; wins: Wins };
+type Prize = { tier: number; dividend: number | null; winningUnit: number | null };
+type Draw = { drawNo: string; drawDate: string; numbers: number[]; extra: number; prizes: Prize[]; updatedFromOfficial: boolean; fetchedAt?: string; lastAttemptAt?: string; updateError?: boolean; source?: string; sourceUrl?: string; standardLowerPrizes?: boolean };
+type Stats = { entries: number; cost: number; prize: number; unpricedEntries?: number; wins: Wins };
+type BetResult = { entries: number; cost: number; prize: number; unpricedEntries?: number; wins: Wins; label: string; picks?: number[][] };
+type AutoProgress = { completed: number; total: number; cost: number; prize: number; unpricedEntries?: number; wins: Wins };
 type AutoSummary = AutoProgress & { requested: number; hitEntries: number[][]; cancelled: boolean };
 type AutoTicket = { entry: number; numbers: number[]; tier: number; status: "drawing" | "settled" };
 
 const EMPTY_WINS: Wins = [0, 0, 0, 0, 0, 0, 0];
 const EMPTY_STATS: Stats = { entries: 0, cost: 0, prize: 0, wins: EMPTY_WINS };
 const DEFAULT_ALERT_TIERS = [true, true, true, true, true, true, true];
-const FALLBACK_DRAW: Draw = {
-  drawNo: "26/095", drawDate: "2026-08-29", numbers: [4, 7, 8, 11, 26, 30], extra: 42, updatedFromOfficial: false,
-  prizes: [
-    { tier: 1, dividend: 4_149_710, winningUnit: 7 }, { tier: 2, dividend: 301_160, winningUnit: 3 },
-    { tier: 3, dividend: 19_200, winningUnit: 432.5 }, { tier: 4, dividend: 9_600, winningUnit: 379.5 },
-    { tier: 5, dividend: 640, winningUnit: 14_764.5 }, { tier: 6, dividend: 320, winningUnit: 8_645 },
-    { tier: 7, dividend: 40, winningUnit: 188_816.6 },
-  ],
-};
+const INITIAL_DRAWS = bundledHistory.draws as Draw[];
+const FALLBACK_DRAW = INITIAL_DRAWS[0];
 const TIER_NAMES = ["頭獎", "二獎", "三獎", "四獎", "五獎", "六獎", "七獎"];
 const TIER_RULES = ["6個正選", "5個正選＋特別號", "5個正選", "4個正選＋特別號", "4個正選", "3個正選＋特別號", "3個正選"];
 const RED = new Set([1, 2, 7, 8, 12, 13, 18, 19, 23, 24, 29, 30, 34, 35, 40, 45, 46]);
@@ -38,7 +33,7 @@ const BLUE = new Set([3, 4, 9, 10, 14, 15, 20, 25, 26, 31, 36, 37, 41, 42, 47, 4
 const DRAW_CYCLE_MS = 1100;
 
 function ballColor(n: number) { return RED.has(n) ? "red" : BLUE.has(n) ? "blue" : "green"; }
-function money(value: number) { return new Intl.NumberFormat("zh-HK", { style: "currency", currency: "HKD", maximumFractionDigits: 0 }).format(value); }
+function money(value: number | null) { if (value === null) return "未有派彩"; return new Intl.NumberFormat("zh-HK", { style: "currency", currency: "HKD", maximumFractionDigits: 0 }).format(value); }
 function quickPick() {
   const pool = Array.from({ length: 49 }, (_, i) => i + 1);
   for (let i = pool.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [pool[i], pool[j]] = [pool[j], pool[i]]; }
@@ -101,6 +96,10 @@ function timeLabel(value?: string) {
 
 export default function Home() {
   const [draw, setDraw] = useState<Draw>(FALLBACK_DRAW); const [loadingDraw, setLoadingDraw] = useState(true);
+  const [draws, setDraws] = useState<Draw[]>(INITIAL_DRAWS);
+  const drawsRef = useRef<Draw[]>(INITIAL_DRAWS); const followLatestRef = useRef(true);
+  const [checkedAt, setCheckedAt] = useState(bundledHistory.checkedAt);
+  const [officialUnavailable, setOfficialUnavailable] = useState(bundledHistory.officialUnavailable);
   const [quickCount, setQuickCount] = useState(10);
   const { stats: periodStats, allStats, add: addStats, reset: resetStats, ready: statsReady, storageError, hasLegacy } = usePersistentStats(`${draw.drawDate}:${draw.drawNo}`);
   const [statsScope, setStatsScope] = useState("period");
@@ -132,36 +131,47 @@ export default function Home() {
   const marbleAudioRef = useRef<HTMLAudioElement | null>(null); const marbleStopTimerRef = useRef<number | null>(null);
   const tierCursorRef = useRef<number[]>(Array(7).fill(0)); const focusTimerRef = useRef<number | null>(null);
 
+  const selectDraw = (key: string) => {
+    if (busyRef.current || loadingDraw) return;
+    const next = drawsRef.current.find(d => drawKey(d) === key);
+    if (!next) return;
+    followLatestRef.current = key === drawKey(drawsRef.current[0]);
+    drawRef.current = next; setDraw(next); setLastPicks([]); setLastLabel("尚未投注");
+    setStatsScope("period"); setWinnerOpen(false);
+    try { localStorage.setItem("mark-six-selected-draw-v1", followLatestRef.current ? "latest" : key); } catch {}
+  };
   const loadLatest = useCallback(async () => {
     if (busyRef.current) return;
     setLoadingDraw(true); setUpdateNotice("");
     try {
-      const endpoint = window.location.hostname.endsWith("github.io") ? new URL("latest-result.json", window.location.href).toString() : "/api/latest-result";
-      const response = await fetch(endpoint, { cache: "no-store", signal: AbortSignal.timeout(12000) });
+      const endpoint = window.location.hostname.endsWith("github.io") ? new URL("draw-history.json", window.location.href).toString() : "/api/draw-history";
+      const response = await fetch(endpoint, { cache: "no-store", signal: AbortSignal.timeout(15000) });
       if (!response.ok) throw new Error("unavailable");
-      const incoming: Draw = await response.json();
-      if (!validDraw(incoming)) throw new Error("invalid");
+      const incoming = await response.json();
+      if (!Array.isArray(incoming.draws) || !incoming.draws.length || !incoming.draws.every(validDraw)) throw new Error("invalid");
+      const merged = mergeDraws(drawsRef.current, incoming.draws) as Draw[];
+      drawsRef.current = merged; setDraws(merged);
       const existing = drawRef.current;
-      // Never replace a newer saved draw with an older build-time fallback.
-      const keepExisting = incoming.drawDate < existing.drawDate || (!incoming.updatedFromOfficial && existing.updatedFromOfficial);
-      const next = keepExisting ? existing : incoming;
+      const next = followLatestRef.current ? merged[0] : merged.find(d => drawKey(d) === drawKey(existing)) ?? existing;
       drawRef.current = next; setDraw(next);
-      if (!keepExisting && next.drawNo !== existing.drawNo) { setLastPicks([]); setLastLabel("尚未投注"); }
-      if (keepExisting || incoming.updateError || !incoming.updatedFromOfficial) {
-        setUpdateNotice("未能取得最新官方資料，正使用已儲存結果。");
-      } else if (incoming.fetchedAt && Date.now() - Date.parse(incoming.fetchedAt) > 12 * 60 * 60 * 1000) {
-        setUpdateNotice("資料已超過 12 小時未成功更新，未必係最近一期。");
-      } else if (!incoming.fetchedAt) {
-        setUpdateNotice("官方資料快照未附更新時間，未能確認是否最新。");
-      }
-      try { localStorage.setItem("mark-six-last-draw-v2", JSON.stringify(next)); } catch {}
-    } catch { setUpdateNotice("更新失敗，正保留已儲存結果；稍後可再試。"); }
+      if (drawKey(next) !== drawKey(existing)) { setLastPicks([]); setLastLabel("尚未投注"); }
+      setCheckedAt(incoming.checkedAt || ""); setOfficialUnavailable(!!incoming.officialUnavailable);
+      if (incoming.updateError) setUpdateNotice("自動更新暫時失敗，正保留已儲存嘅期數。");
+      else if (!incoming.checkedAt || Date.now() - Date.parse(incoming.checkedAt) > 12 * 60 * 60 * 1000) setUpdateNotice("資料超過 12 小時未更新，可能未包含最近攪珠。");
+      try { localStorage.setItem("mark-six-draw-history-v1", JSON.stringify({...incoming,draws:merged})); } catch {}
+    } catch { setUpdateNotice("更新失敗，仍可選擇已儲存嘅攪珠期數。"); }
     finally { setLoadingDraw(false); }
   }, []);
   useEffect(() => {
     try {
       const saved = JSON.parse(localStorage.getItem("mark-six-last-draw-v2") || "null");
-      if (validDraw(saved)) { drawRef.current = saved; setDraw(saved); }
+      const cached = JSON.parse(localStorage.getItem("mark-six-draw-history-v1") || "null");
+      const merged = mergeDraws(INITIAL_DRAWS, validDraw(saved) ? [saved] : [], Array.isArray(cached?.draws) ? cached.draws : []) as Draw[];
+      drawsRef.current = merged; setDraws(merged);
+      const selected = localStorage.getItem("mark-six-selected-draw-v1");
+      const next = merged.find(d => drawKey(d) === selected) ?? merged[0];
+      followLatestRef.current = !selected || selected === "latest" || drawKey(next) === drawKey(merged[0]);
+      drawRef.current = next; setDraw(next);
       const prefs = JSON.parse(localStorage.getItem("mark-six-playback-v1") || "{}");
       if (typeof prefs.muted === "boolean") { mutedRef.current = prefs.muted; setMuted(prefs.muted); }
       if ([0.5, 1, 2].includes(prefs.speed)) { speedRef.current = prefs.speed; setSpeed(prefs.speed); }
@@ -247,12 +257,14 @@ export default function Home() {
   }
 
   const addResult = useCallback((result: BetResult, allowPopup = true) => {
+    const unpricedEntries = result.wins.reduce((sum, count, i) => sum + (draw.prizes.find(p => p.tier === i + 1)?.dividend == null ? count : 0), 0);
+    result = {...result, unpricedEntries};
     addStats(result);
     const savedAt = new Date().toISOString();
     collect((result.picks ?? []).flatMap(pick => {
       const tier = classify(pick, draw);
       if (tier < 0) return [];
-      return [{ id: Array.from(crypto.getRandomValues(new Uint32Array(4)), n => n.toString(16).padStart(8, "0")).join("-"), savedAt, drawNo: draw.drawNo, drawDate: draw.drawDate, numbers: [...draw.numbers], extra: draw.extra, pick: [...pick], tier, prize: draw.prizes.find(p => p.tier === tier + 1)?.dividend ?? 0 }];
+      return [{ id: Array.from(crypto.getRandomValues(new Uint32Array(4)), n => n.toString(16).padStart(8, "0")).join("-"), savedAt, drawNo: draw.drawNo, drawDate: draw.drawDate, numbers: [...draw.numbers], extra: draw.extra, pick: [...pick], tier, prize: draw.prizes.find(p => p.tier === tier + 1)?.dividend ?? null }];
     }));
     setLastLabel(result.label); const hasWin = result.wins.some(Boolean);
     if (hasWin) {
@@ -406,18 +418,18 @@ export default function Home() {
   const displayedAuto = autoSummary ?? autoProgress;
 
   return <main className={`app-shell density-${density}`} style={{ "--draw-duration": `${cycleMs}ms` } as CSSProperties}>
-    <header className="topbar"><div className="brand-mark"><span>6</span><i>+</i></div><div><p className="eyebrow">MARK SIX LAB</p><h1>六合彩模擬器</h1></div><button className="icon-button collection-trigger" disabled={isDrawing || autoRunning} onClick={() => { setCollectionLimit(20); setCollectionOpen(true); }} aria-label="中獎收藏冊"><Trophy size={19}/></button><button className="icon-button settings-trigger" onClick={() => setSettingsOpen(true)} aria-label="開啟設定"><Settings2 size={19}/></button><button className="icon-button" disabled={loadingDraw || isDrawing || autoRunning || !!autoSummary} onClick={loadLatest} aria-label="更新最新攪珠結果"><RotateCcw className={loadingDraw ? "spin" : ""} size={19} /></button></header>
+    <header className="topbar"><div className="brand-mark"><span>6</span><i>+</i></div><div><p className="eyebrow">MARK SIX LAB</p><h1>六合彩模擬器</h1></div><button className="icon-button collection-trigger" disabled={isDrawing || autoRunning} onClick={() => { setCollectionLimit(20); setCollectionOpen(true); }} aria-label="中獎收藏冊"><Trophy size={19}/></button><button className="icon-button settings-trigger" onClick={() => setSettingsOpen(true)} aria-label="開啟設定"><Settings2 size={19}/></button><button className="icon-button" disabled={loadingDraw || isDrawing || autoRunning || !!autoSummary} onClick={loadLatest} aria-label="重新載入攪珠資料"><RotateCcw className={loadingDraw ? "spin" : ""} size={19} /></button></header>
     <div className={`frozen-draw ${showFrozenDraw && !autoRunning && !autoSummary ? "visible" : ""}`} aria-hidden={!showFrozenDraw}>
       <span>第 {draw.drawNo} 期</span><div className="frozen-balls">{draw.numbers.map((n) => <Ball key={n} number={n} small />)}<b>+</b><Ball number={draw.extra} extra small /></div>
     </div>
     <div className="content-grid">
         <section className="summary-card"><div className="card-title-row"><div><span className="section-kicker">模擬戰績</span><h2>{statsScope === "period" ? "本期戰績" : "歷來戰績"}</h2></div><div className="stats-actions"><Tabs value={statsScope} onValueChange={setStatsScope}><TabsList aria-label="戰績範圍"><TabsTrigger value="period">本期</TabsTrigger><TabsTrigger value="all">歷來</TabsTrigger></TabsList></Tabs>{statsScope === "period" && <button className="text-button danger" disabled={isDrawing || autoRunning || !statsReady || !collectionReady} onClick={() => setResetOpen(true)}>重設本期</button>}</div></div>
-          <div className="money-grid compact"><div><span>總投注成本</span><strong>{money(stats.cost)}</strong></div><div><span>中獎獎金</span><strong className="gold">{money(stats.prize)}</strong></div><div><span>淨結果</span><strong className={stats.prize - stats.cost >= 0 ? "positive" : "negative"}>{money(stats.prize - stats.cost)}</strong></div></div>
-          <div className="stat-strip compact"><span><b>{stats.entries.toLocaleString("zh-HK")}</b> 總注數</span><span><b>{stats.wins.reduce((a, b) => a + b, 0).toLocaleString("zh-HK")}</b> 中獎注數</span></div><p className="local-note">戰績儲存於此瀏覽器。{statsScope === "all" && hasLegacy ? "包含未分期嘅舊版戰績。" : ""}</p>{storageError && <p className="update-notice" role="status">{storageError}</p>}{collectionError && <p className="update-notice" role="status">{collectionError}</p>}</section>
+          <div className="money-grid compact"><div><span>總投注成本</span><strong>{money(stats.cost)}</strong></div><div><span>{stats.unpricedEntries ? "已知中獎獎金" : "中獎獎金"}</span><strong className="gold">{money(stats.prize)}</strong></div><div><span>{stats.unpricedEntries ? "已知淨結果" : "淨結果"}</span><strong className={stats.prize - stats.cost >= 0 ? "positive" : "negative"}>{money(stats.prize - stats.cost)}</strong></div></div>
+          <div className="stat-strip compact"><span><b>{stats.entries.toLocaleString("zh-HK")}</b> 總注數</span><span><b>{stats.wins.reduce((a, b) => a + b, 0).toLocaleString("zh-HK")}</b> 中獎注數</span></div>{stats.unpricedEntries ? <p className="update-notice">另有 {stats.unpricedEntries} 注中獎未有派彩，未計入獎金及淨結果。</p> : null}<p className="local-note">戰績儲存於此瀏覽器。{statsScope === "all" && hasLegacy ? "包含未分期嘅舊版戰績。" : ""}</p>{storageError && <p className="update-notice" role="status">{storageError}</p>}{collectionError && <p className="update-notice" role="status">{collectionError}</p>}</section>
 
       <section className="bet-card">
-        <div ref={drawPanelRef} className="draw-panel"><div className="draw-meta"><div><span className="section-kicker">最近一期攪珠</span><strong>第 {draw.drawNo} 期</strong></div><div className={`source-pill ${draw.updatedFromOfficial ? "online" : "offline"}`}>{draw.updatedFromOfficial ? <Wifi size={13} /> : <WifiOff size={13} />}{draw.updatedFromOfficial ? "官方資料快照" : "已儲存資料"}</div></div>
-          <div className="draw-balls" aria-label={`攪珠結果 ${draw.numbers.join("、")}，特別號 ${draw.extra}`}>{draw.numbers.map((n) => <Ball key={n} number={n} />)}<span className="plus">+</span><Ball number={draw.extra} extra /></div><p className="draw-date">{draw.drawDate.replaceAll("-", "/")} · 特別號碼以金圈標示</p><p className="update-time">{loadingDraw ? "正在檢查最新資料…" : `上次成功更新：${timeLabel(draw.fetchedAt)}`}</p>{updateNotice && <p className="update-notice" role="status">{updateNotice}</p>}</div>
+        <div ref={drawPanelRef} className="draw-panel"><div className="draw-selector"><label id="draw-selector-label">選擇攪珠期數</label><Select value={drawKey(draw)} onValueChange={selectDraw} disabled={loadingDraw || busyRef.current}><SelectTrigger aria-labelledby="draw-selector-label"><SelectValue /></SelectTrigger><SelectContent position="popper">{draws.map((item, index) => <SelectItem key={drawKey(item)} value={drawKey(item)}>第 {item.drawNo} 期 · {item.drawDate}{index === 0 ? "（最近已收錄）" : ""}</SelectItem>)}</SelectContent></Select>{drawKey(draw) !== drawKey(draws[0]) && <button className="text-button" disabled={loadingDraw || busyRef.current} onClick={() => selectDraw(drawKey(draws[0]))}>返回最近一期</button>}</div><div className="draw-meta"><div><span className="section-kicker">{drawKey(draw) === drawKey(draws[0]) ? "最近已收錄攪珠" : "歷史攪珠"}</span><strong>第 {draw.drawNo} 期</strong></div><div className={`source-pill ${draw.updatedFromOfficial ? "online" : "offline"}`}>{draw.updatedFromOfficial ? <Wifi size={13} /> : <WifiOff size={13} />}{draw.updatedFromOfficial ? "馬會核對資料" : draw.source === "oncc" ? "東網結果資料" : "已儲存資料"}</div></div>
+          <div className="draw-balls" aria-label={`攪珠結果 ${draw.numbers.join("、")}，特別號 ${draw.extra}`}>{draw.numbers.map((n) => <Ball key={n} number={n} />)}<span className="plus">+</span><Ball number={draw.extra} extra /></div><p className="draw-date">{draw.drawDate.replaceAll("-", "/")} · 特別號碼以金圈標示</p><p className="update-time">{loadingDraw ? "正在檢查最新資料…" : `資料檢查時間：${timeLabel(checkedAt)}`}</p>{updateNotice && <p className="update-notice" role="status">{updateNotice}</p>}<p className="history-note">已收錄 {draws.length} 期。切換期數會保留各期戰績。</p><p className="history-note">{officialUnavailable ? "官方接口暫未能使用，由東網提供後備更新。" : "已檢查結果來源。"} 開獎晚每 15 分鐘嘗試同步，其餘每 6 小時；重新載入只讀取網站已同步資料。</p>{draw.standardLowerPrizes && <p className="history-note">四至七獎以標準派彩模擬，中獎注數未提供。</p>}{draw.prizes.some(p => p.dividend === null) && <p className="update-notice">本期有獎級未有派彩，模擬中獎只計注數，獎金及淨結果不包含該部分。</p>}<a className="result-source" href={draw.source === "oncc" ? "https://win.on.cc/marksix/" : "https://bet.hkjc.com/ch/marksix/results"} target="_blank" rel="noreferrer">查看結果來源 ↗</a></div>
         <div className="ticket-panel">
           <div className="ticket-heading"><div><span className="section-kicker">隨機投注</span><strong>{lastLabel}</strong></div></div>
           <div className="mode-content random-only"><div className="counter-row"><div><span>每批注數</span><p>每次以 5 注調整</p></div><div className="stepper"><button onClick={() => setQuickCount(Math.max(5, quickCount - 5))} aria-label="減少 5 注">−</button><strong>{quickCount}</strong><button onClick={() => setQuickCount(Math.min(100, quickCount + 5))} aria-label="增加 5 注">＋</button></div></div>
@@ -431,7 +443,7 @@ export default function Home() {
       </section>
       <aside className="stats-column">
         <section className="prize-card"><div className="card-title-row"><div><span className="section-kicker">當期派彩</span><h2>各獎級結果</h2></div><span className="unit-note">每 $10 注項</span></div><div className="prize-list">
-          {TIER_NAMES.map((name, index) => { const prize = draw.prizes.find((p) => p.tier === index + 1); return <div className={`prize-row ${periodStats.wins[index] ? "won" : ""}`} key={name}><div className="tier-badge">{index + 1}</div><div className="tier-name"><strong>{name}</strong><span>{TIER_RULES[index]}</span></div><div className="tier-official"><strong>{money(prize?.dividend ?? 0)}</strong><span>{(prize?.winningUnit ?? 0).toLocaleString("zh-HK")} 注中</span></div><div className="tier-yours"><strong>{periodStats.wins[index].toLocaleString("zh-HK")}</strong><span>本期中</span></div></div>; })}
+          {TIER_NAMES.map((name, index) => { const prize = draw.prizes.find((p) => p.tier === index + 1); return <div className={`prize-row ${periodStats.wins[index] ? "won" : ""}`} key={name}><div className="tier-badge">{index + 1}</div><div className="tier-name"><strong>{name}</strong><span>{TIER_RULES[index]}</span></div><div className="tier-official"><strong>{money(prize?.dividend ?? null)}</strong><span>{prize?.winningUnit == null ? "注數未提供" : `${prize.winningUnit.toLocaleString("zh-HK")} 注中`}</span></div><div className="tier-yours"><strong>{periodStats.wins[index].toLocaleString("zh-HK")}</strong><span>本期中</span></div></div>; })}
         </div></section>
       </aside>
     </div>
@@ -439,7 +451,7 @@ export default function Home() {
       <DialogTitle className="sr-only">自動投注</DialogTitle>
       <header className="auto-header"><div><span>AUTO DRAW</span><strong>{autoSummary && <CheckCircle2 size={17} />}{autoRunning ? stopping ? "正完成最後一批" : paused ? isDrawing ? "完成本批後暫停" : "自動投注已暫停" : "自動投注進行中" : autoSummary?.cancelled ? "自動投注已停止" : "自動投注完成"}</strong></div>{playbackControls(true)}<button disabled={stopping} onClick={autoRunning ? stopAutoBet : closeAutoSummary} aria-label={autoRunning ? "停止自動投注" : "關閉總結"}>{autoRunning ? <Square size={18} /> : <X size={21} />}</button></header>
       <div className="auto-draw-stage"><span>第 {draw.drawNo} 期攪珠結果</span><div className="auto-static-balls">{draw.numbers.map((n) => <Ball key={n} number={n} />)}<b>+</b><Ball number={draw.extra} extra /></div><small>{isDrawing ? "投注號碼開彩中…" : autoRunning ? paused ? "已暫停，可翻睇注項" : "準備下一批投注" : "所有投注已完成，可捲動查看"}</small></div>
-      <div className="auto-progress-card"><div className="progress-heading"><span>{autoSummary ? autoSummary.cancelled ? "已停止" : "已完成" : "進度"}</span><strong>{displayedAuto.completed.toLocaleString("zh-HK")} / {displayedAuto.total.toLocaleString("zh-HK")} 注</strong></div><div className="progress-track"><i style={{ width: `${Math.min(100, displayedAuto.completed / displayedAuto.total * 100)}%` }} /></div><div className={`auto-metrics no-round ${autoSummary ? "has-net" : ""}`}><span>成本 <b>{money(displayedAuto.cost)}</b></span><span>獎金 <b>{money(displayedAuto.prize)}</b></span>{autoSummary && <span>淨額 <b className={displayedAuto.prize - displayedAuto.cost >= 0 ? "positive" : "negative"}>{money(displayedAuto.prize - displayedAuto.cost)}</b></span>}</div></div>
+      <div className="auto-progress-card"><div className="progress-heading"><span>{autoSummary ? autoSummary.cancelled ? "已停止" : "已完成" : "進度"}</span><strong>{displayedAuto.completed.toLocaleString("zh-HK")} / {displayedAuto.total.toLocaleString("zh-HK")} 注</strong></div><div className="progress-track"><i style={{ width: `${Math.min(100, displayedAuto.completed / displayedAuto.total * 100)}%` }} /></div><div className={`auto-metrics no-round ${autoSummary ? "has-net" : ""}`}><span>成本 <b>{money(displayedAuto.cost)}</b></span><span>{draw.prizes.some(p => p.dividend === null) ? "已知獎金" : "獎金"} <b>{money(displayedAuto.prize)}</b></span>{autoSummary && <span>{draw.prizes.some(p => p.dividend === null) ? "已知淨額" : "淨額"} <b className={displayedAuto.prize - displayedAuto.cost >= 0 ? "positive" : "negative"}>{money(displayedAuto.prize - displayedAuto.cost)}</b></span>}</div></div>
       <div ref={autoTicketGridRef} className="auto-ticket-grid" onWheel={stopFollowing} onTouchStart={stopFollowing} onPointerDown={stopFollowing}>{autoTickets.map((ticket) => { const winner = ticket.status === "settled" && ticket.tier >= 0; return <div data-entry={ticket.entry} className={`auto-pick-card ${ticket.status === "drawing" ? "drawing" : winner ? "winning" : "losing"} ${focusedEntry === ticket.entry ? "tier-focused" : ""}`} key={ticket.entry}><div className="ticket-meta"><span>#{ticket.entry}</span><em>{ticket.status === "drawing" ? "開彩中" : winner ? TIER_NAMES[ticket.tier] : "未中"}</em></div><div className="ticket-balls">{ticket.numbers.map((n) => <Ball key={n} number={n} small extra={winner && n === draw.extra} muted={winner && !draw.numbers.includes(n) && n !== draw.extra} />)}</div></div>; })}</div>
       <div className={`auto-footer-panel ${autoSummary ? "complete" : ""}`}><div className="auto-live-hits"><div>{alertTiers.map((enabled, index) => { if (!enabled) return null; const entries = autoSummary ? autoSummary.hitEntries[index] : autoHitEntries[index]; return <button type="button" className={`tier-jump ${entries.length ? "hit" : ""}`} disabled={!entries.length} onClick={() => jumpToTier(index, entries)} aria-label={`${TIER_NAMES[index]}，${entries.length ? `中 ${entries.length} 注，跳到下一張中獎票` : "未中"}`} key={TIER_NAMES[index]}><b>{TIER_NAMES[index]}</b>{entries.length ? `${entries.length.toLocaleString("zh-HK")}注中` : "未中"}</button>; })}</div></div>{autoSummary && <button className="primary-action" onClick={closeAutoSummary}>完成</button>}</div>
     </AutoBetDialogContent></Dialog>
@@ -461,6 +473,6 @@ export default function Home() {
       {TIER_NAMES.map((name, index) => <label key={name} className="settings-row"><span>{name}<small>{TIER_RULES[index]}</small></span><Switch checked={alertTiers[index]} onCheckedChange={enabled => setTierAlert(index, enabled)} aria-label={`${name}中獎彈窗提示`}/></label>)}
     </DialogContent></Dialog>
     <Dialog open={resetOpen} onOpenChange={setResetOpen}><DialogContent className="settings-dialog"><DialogHeader><DialogTitle>重設本期戰績？</DialogTitle><DialogDescription>第 {draw.drawNo} 期嘅戰績會清除，歷來總計亦會扣除本期。其他期數及舊版戰績會保留。</DialogDescription></DialogHeader><button className="primary-action" onClick={() => { resetStats(); setResetOpen(false); }}>確認重設本期</button></DialogContent></Dialog>
-    <Dialog open={winnerOpen} onOpenChange={setWinnerOpen}><DialogContent className="winner-dialog"><div className="trophy-wrap"><Trophy size={36} /></div><DialogHeader><DialogTitle>恭喜中獎！</DialogTitle><DialogDescription>{lastTriggeredTier >= 0 ? `${TIER_NAMES[lastTriggeredTier]} · ` : ""}{lastWin?.label}</DialogDescription></DialogHeader><div className="winner-amount">{money(lastWin?.prize ?? 0)}</div><div className="winner-breakdown">{lastWin?.wins.map((count, i) => count > 0 && <span key={i}>{TIER_NAMES[i]} × {count.toLocaleString("zh-HK")}</span>)}</div><button className="primary-action full" onClick={() => setWinnerOpen(false)}>繼續模擬</button></DialogContent></Dialog>
+    <Dialog open={winnerOpen} onOpenChange={setWinnerOpen}><DialogContent className="winner-dialog"><div className="trophy-wrap"><Trophy size={36} /></div><DialogHeader><DialogTitle>恭喜中獎！</DialogTitle><DialogDescription>{lastTriggeredTier >= 0 ? `${TIER_NAMES[lastTriggeredTier]} · ` : ""}{lastWin?.label}</DialogDescription></DialogHeader><div className="winner-amount">{lastWin?.unpricedEntries ? "已知獎金 " : ""}{money(lastWin?.prize ?? 0)}</div>{!!lastWin?.unpricedEntries && <p>{lastWin.unpricedEntries} 注中獎未有派彩，未計入以上金額。</p>}<div className="winner-breakdown">{lastWin?.wins.map((count, i) => count > 0 && <span key={i}>{TIER_NAMES[i]} × {count.toLocaleString("zh-HK")}</span>)}</div><button className="primary-action full" onClick={() => setWinnerOpen(false)}>繼續模擬</button></DialogContent></Dialog>
   </main>;
 }
