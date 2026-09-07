@@ -7,7 +7,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { emptyLedger, emptyStats, restoreLedger, recordResult, totalStats, validDraw, type Ledger } from "@/lib/simulation";
+import { emptyLedger, emptyStats, restoreLedger, recordResult, totalStats, validDraw, type Ledger, type SavedWin, restoreWins } from "@/lib/simulation";
 
 type Wins = [number, number, number, number, number, number, number];
 type Prize = { tier: number; dividend: number; winningUnit: number };
@@ -76,6 +76,23 @@ function usePersistentStats(drawKey: string) {
   const reset = () => setLedger(old => ({ ...old, draws: { ...old.draws, [drawKey]: emptyStats() } }));
   return { stats: ledger.draws[drawKey] ?? EMPTY_STATS, allStats: totalStats(ledger), add, reset, ready, storageError, hasLegacy: ledger.legacy.entries > 0 };
 }
+function useWinCollection() {
+  const [wins, setWins] = useState<SavedWin[]>([]);
+  const [ready, setReady] = useState(false); const [writable, setWritable] = useState(false);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    try { setWins(restoreWins(localStorage.getItem("mark-six-win-collection-v1"))); setWritable(true); }
+    catch { setError("未能讀取收藏，原有資料已保留；新收藏暫存於本頁。"); }
+    setReady(true);
+  }, []);
+  useEffect(() => {
+    if (!ready || !writable) return;
+    try { localStorage.setItem("mark-six-win-collection-v1", JSON.stringify(wins)); }
+    catch { setError("收藏未能儲存，請保持本頁開啟。"); }
+  }, [wins, ready, writable]);
+  const collect = useCallback((items: SavedWin[]) => { if (items.length) setWins(old => [...items, ...old]); }, []);
+  return { wins, collect, ready, error };
+}
 function timeLabel(value?: string) {
   if (!value || !Number.isFinite(Date.parse(value))) return "未有成功更新紀錄";
   return new Date(value).toLocaleString("zh-HK", { timeZone: "Asia/Hong_Kong", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }) + "（香港）";
@@ -87,6 +104,10 @@ export default function Home() {
   const { stats: periodStats, allStats, add: addStats, reset: resetStats, ready: statsReady, storageError, hasLegacy } = usePersistentStats(`${draw.drawDate}:${draw.drawNo}`);
   const [statsScope, setStatsScope] = useState("period");
   const stats = statsScope === "period" ? periodStats : allStats;
+  const { wins: collection, collect, ready: collectionReady, error: collectionError } = useWinCollection();
+  const [collectionOpen, setCollectionOpen] = useState(false); const [collectionLimit, setCollectionLimit] = useState(20);
+  const [replayWin, setReplayWin] = useState<SavedWin | null>(null); const [replayDrawing, setReplayDrawing] = useState(false);
+  const replayTimerRef = useRef<number | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false); const [resetOpen, setResetOpen] = useState(false);
   const [updateNotice, setUpdateNotice] = useState("");
   const [muted, setMuted] = useState(false); const mutedRef = useRef(false);
@@ -165,6 +186,7 @@ export default function Home() {
   }, []);
   useEffect(() => { mountedRef.current = true; return () => {
     mountedRef.current = false; cancelAutoRef.current = true; marbleAudioRef.current?.pause();
+    if (replayTimerRef.current !== null) window.clearTimeout(replayTimerRef.current);
     if (focusTimerRef.current !== null) window.clearTimeout(focusTimerRef.current);
     if (marbleStopTimerRef.current !== null) window.clearTimeout(marbleStopTimerRef.current);
   }; }, []);
@@ -225,6 +247,12 @@ export default function Home() {
 
   const addResult = useCallback((result: BetResult, allowPopup = true) => {
     addStats(result);
+    const savedAt = new Date().toISOString();
+    collect((result.picks ?? []).flatMap(pick => {
+      const tier = classify(pick, draw);
+      if (tier < 0) return [];
+      return [{ id: Array.from(crypto.getRandomValues(new Uint32Array(4)), n => n.toString(16).padStart(8, "0")).join("-"), savedAt, drawNo: draw.drawNo, drawDate: draw.drawDate, numbers: [...draw.numbers], extra: draw.extra, pick: [...pick], tier, prize: draw.prizes.find(p => p.tier === tier + 1)?.dividend ?? 0 }];
+    }));
     setLastLabel(result.label); const hasWin = result.wins.some(Boolean);
     if (hasWin) {
       setLastWin(result);
@@ -233,7 +261,7 @@ export default function Home() {
       if (allowPopup && triggeredTier >= 0) setWinnerOpen(true);
     }
     return hasWin;
-  }, [alertTiers, addStats]);
+  }, [alertTiers, addStats, collect, draw]);
 
   const randomBet = useCallback((count: number, showPicks = true): BetResult => {
     const picks = Array.from({ length: count }, quickPick); const wins = [...EMPTY_WINS] as Wins;
@@ -242,7 +270,7 @@ export default function Home() {
   }, [draw]);
 
   async function placeBet() {
-    if (busyRef.current || loadingDraw || !statsReady) return;
+    if (busyRef.current || loadingDraw || !statsReady || !collectionReady) return;
     busyRef.current = true;
     const result = randomBet(quickCount, false);
     if (result.picks) setLastPicks(result.picks);
@@ -253,7 +281,7 @@ export default function Home() {
     setIsDrawing(false); busyRef.current = false;
   }
   async function runUntilWin() {
-    if (busyRef.current || loadingDraw || !statsReady) return;
+    if (busyRef.current || loadingDraw || !statsReady || !collectionReady) return;
     busyRef.current = true;
     let attempts = 0, entries = 0, cost = 0, prize = 0; const wins = [...EMPTY_WINS] as Wins; let latest: BetResult;
     do { latest = randomBet(quickCount, false); attempts += 1; entries += latest.entries; cost += latest.cost; prize += latest.prize; latest.wins.forEach((v, i) => wins[i] += v); }
@@ -261,11 +289,11 @@ export default function Home() {
     setLastPicks(latest.picks ?? []);
     const duration = DRAW_CYCLE_MS / speedRef.current; setCycleMs(duration);
     playSound("spin", duration); setIsDrawing(true); await wait(duration);
-    playSound(wins.some(Boolean) ? "coin" : "settle"); addResult({ entries, cost, prize, wins, label: "連續投注至中獎" });
+    playSound(wins.some(Boolean) ? "coin" : "settle"); addResult({ entries, cost, prize, wins, label: "連續投注至中獎", picks: latest.picks });
     setIsDrawing(false); busyRef.current = false;
   }
   async function startAutoBet() {
-    if (busyRef.current || loadingDraw || !statsReady) return;
+    if (busyRef.current || loadingDraw || !statsReady || !collectionReady) return;
     busyRef.current = true;
     const requested = Math.max(10, Math.min(100_000, Math.round((Math.floor(autoTotal) || 10) / 10) * 10));
     const perRound = Math.max(5, Math.min(100, Math.round((Math.floor(quickCount) || 5) / 5) * 5));
@@ -321,6 +349,19 @@ export default function Home() {
     const next = Number(value); speedRef.current = next; setSpeed(next);
     savePlayback({ muted: mutedRef.current, speed: next, density });
   }
+  function stopReplay() {
+    if (replayTimerRef.current !== null) window.clearTimeout(replayTimerRef.current);
+    replayTimerRef.current = null; setReplayDrawing(false); marbleAudioRef.current?.pause();
+  }
+  function startReplay(win: SavedWin) {
+    stopReplay(); setReplayWin(win); setReplayDrawing(true);
+    const duration = DRAW_CYCLE_MS / speedRef.current; setCycleMs(duration); playSound("spin", duration);
+    replayTimerRef.current = window.setTimeout(() => { setReplayDrawing(false); playSound("coin"); replayTimerRef.current = null; }, duration);
+  }
+  function closeCollection(open: boolean) {
+    setCollectionOpen(open);
+    if (!open) { stopReplay(); setReplayWin(null); }
+  }
   function playbackControls(inAuto = false) {
     return <div className="playback-controls">
       {inAuto && autoRunning && <button className="control-button pause-button" onClick={togglePause} disabled={stopping} aria-label={paused ? "繼續自動投注" : "暫停自動投注"}>{paused ? <Play size={16}/> : <Pause size={16}/>}<span>{paused ? "繼續" : "暫停"}</span></button>}
@@ -364,14 +405,14 @@ export default function Home() {
   const displayedAuto = autoSummary ?? autoProgress;
 
   return <main className={`app-shell density-${density}`} style={{ "--draw-duration": `${cycleMs}ms` } as CSSProperties}>
-    <header className="topbar"><div className="brand-mark"><span>6</span><i>+</i></div><div><p className="eyebrow">MARK SIX LAB</p><h1>六合彩模擬器</h1></div><button className="icon-button settings-trigger" onClick={() => setSettingsOpen(true)} aria-label="開啟設定"><Settings2 size={19}/></button><button className="icon-button" disabled={loadingDraw || isDrawing || autoRunning || !!autoSummary} onClick={loadLatest} aria-label="更新最新攪珠結果"><RotateCcw className={loadingDraw ? "spin" : ""} size={19} /></button></header>
+    <header className="topbar"><div className="brand-mark"><span>6</span><i>+</i></div><div><p className="eyebrow">MARK SIX LAB</p><h1>六合彩模擬器</h1></div><button className="icon-button collection-trigger" disabled={isDrawing || autoRunning} onClick={() => { setCollectionLimit(20); setCollectionOpen(true); }} aria-label="中獎收藏冊"><Trophy size={19}/></button><button className="icon-button settings-trigger" onClick={() => setSettingsOpen(true)} aria-label="開啟設定"><Settings2 size={19}/></button><button className="icon-button" disabled={loadingDraw || isDrawing || autoRunning || !!autoSummary} onClick={loadLatest} aria-label="更新最新攪珠結果"><RotateCcw className={loadingDraw ? "spin" : ""} size={19} /></button></header>
     <div className={`frozen-draw ${showFrozenDraw && !autoRunning && !autoSummary ? "visible" : ""}`} aria-hidden={!showFrozenDraw}>
       <span>第 {draw.drawNo} 期</span><div className="frozen-balls">{draw.numbers.map((n) => <Ball key={n} number={n} small />)}<b>+</b><Ball number={draw.extra} extra small /></div>
     </div>
     <div className="content-grid">
-        <section className="summary-card"><div className="card-title-row"><div><span className="section-kicker">模擬戰績</span><h2>{statsScope === "period" ? "本期戰績" : "歷來戰績"}</h2></div><div className="stats-actions"><Tabs value={statsScope} onValueChange={setStatsScope}><TabsList aria-label="戰績範圍"><TabsTrigger value="period">本期</TabsTrigger><TabsTrigger value="all">歷來</TabsTrigger></TabsList></Tabs>{statsScope === "period" && <button className="text-button danger" disabled={isDrawing || autoRunning || !statsReady} onClick={() => setResetOpen(true)}>重設本期</button>}</div></div>
+        <section className="summary-card"><div className="card-title-row"><div><span className="section-kicker">模擬戰績</span><h2>{statsScope === "period" ? "本期戰績" : "歷來戰績"}</h2></div><div className="stats-actions"><Tabs value={statsScope} onValueChange={setStatsScope}><TabsList aria-label="戰績範圍"><TabsTrigger value="period">本期</TabsTrigger><TabsTrigger value="all">歷來</TabsTrigger></TabsList></Tabs>{statsScope === "period" && <button className="text-button danger" disabled={isDrawing || autoRunning || !statsReady || !collectionReady} onClick={() => setResetOpen(true)}>重設本期</button>}</div></div>
           <div className="money-grid compact"><div><span>總投注成本</span><strong>{money(stats.cost)}</strong></div><div><span>中獎獎金</span><strong className="gold">{money(stats.prize)}</strong></div><div><span>淨結果</span><strong className={stats.prize - stats.cost >= 0 ? "positive" : "negative"}>{money(stats.prize - stats.cost)}</strong></div></div>
-          <div className="stat-strip compact"><span><b>{stats.entries.toLocaleString("zh-HK")}</b> 總注數</span><span><b>{stats.wins.reduce((a, b) => a + b, 0).toLocaleString("zh-HK")}</b> 中獎注數</span></div><p className="local-note">戰績儲存於此瀏覽器。{statsScope === "all" && hasLegacy ? "包含未分期嘅舊版戰績。" : ""}</p>{storageError && <p className="update-notice" role="status">{storageError}</p>}</section>
+          <div className="stat-strip compact"><span><b>{stats.entries.toLocaleString("zh-HK")}</b> 總注數</span><span><b>{stats.wins.reduce((a, b) => a + b, 0).toLocaleString("zh-HK")}</b> 中獎注數</span></div><p className="local-note">戰績儲存於此瀏覽器。{statsScope === "all" && hasLegacy ? "包含未分期嘅舊版戰績。" : ""}</p>{storageError && <p className="update-notice" role="status">{storageError}</p>}{collectionError && <p className="update-notice" role="status">{collectionError}</p>}</section>
 
       <section className="bet-card">
         <div ref={drawPanelRef} className="draw-panel"><div className="draw-meta"><div><span className="section-kicker">最近一期攪珠</span><strong>第 {draw.drawNo} 期</strong></div><div className={`source-pill ${draw.updatedFromOfficial ? "online" : "offline"}`}>{draw.updatedFromOfficial ? <Wifi size={13} /> : <WifiOff size={13} />}{draw.updatedFromOfficial ? "官方資料快照" : "已儲存資料"}</div></div>
@@ -384,7 +425,7 @@ export default function Home() {
             {playbackControls()}
             <div className="last-picks">{lastPicks.length ? lastPicks.map((pick, i) => { const tier = classify(pick, draw); const drawing = isDrawing && !autoRunning; const winner = !drawing && tier >= 0; return <div className={`pick-row ${drawing ? "drawing" : winner ? "winning" : "losing"}`} key={`${pick.join("-")}-${i}`}><span className="pick-index">{i + 1}</span><div className="pick-balls">{pick.map((n) => <Ball key={n} number={n} small extra={winner && n === draw.extra} muted={winner && !draw.numbers.includes(n) && n !== draw.extra} />)}</div><em>{drawing ? "開彩中" : winner ? TIER_NAMES[tier] : "未中"}</em></div>; }) : <div className="empty-pick">{autoMode ? "按「開始自動」逐批揭曉號碼" : "按「投注一次」即時產生號碼"}</div>}</div>
           </div>
-          <div className="action-dock"><div className="cost-preview"><span>{autoMode ? "自動投注總計" : "今次投注"}</span><strong>{(autoMode ? autoTotal : quickCount).toLocaleString("zh-HK")} 注 · {money((autoMode ? autoTotal : quickCount) * 10)}</strong></div><button className="secondary-action" disabled={isDrawing || autoRunning || loadingDraw || !statsReady} onClick={autoMode ? placeBet : runUntilWin}>{autoMode ? "投注一批" : "連續至中獎"}</button><button className="primary-action" disabled={isDrawing || autoRunning || loadingDraw || !statsReady} onClick={autoMode ? startAutoBet : placeBet}>{isDrawing ? "開彩中…" : autoMode ? "開始自動" : "投注一次"}</button></div>
+          <div className="action-dock"><div className="cost-preview"><span>{autoMode ? "自動投注總計" : "今次投注"}</span><strong>{(autoMode ? autoTotal : quickCount).toLocaleString("zh-HK")} 注 · {money((autoMode ? autoTotal : quickCount) * 10)}</strong></div><button className="secondary-action" disabled={isDrawing || autoRunning || loadingDraw || !statsReady || !collectionReady} onClick={autoMode ? placeBet : runUntilWin}>{autoMode ? "投注一批" : "連續至中獎"}</button><button className="primary-action" disabled={isDrawing || autoRunning || loadingDraw || !statsReady || !collectionReady} onClick={autoMode ? startAutoBet : placeBet}>{isDrawing ? "開彩中…" : autoMode ? "開始自動" : "投注一次"}</button></div>
         </div>
       </section>
       <aside className="stats-column">
@@ -402,6 +443,17 @@ export default function Home() {
       <div className={`auto-footer-panel ${autoSummary ? "complete" : ""}`}><div className="auto-live-hits"><div>{alertTiers.map((enabled, index) => { if (!enabled) return null; const entries = autoSummary ? autoSummary.hitEntries[index] : autoHitEntries[index]; return <button type="button" className={`tier-jump ${entries.length ? "hit" : ""}`} disabled={!entries.length} onClick={() => jumpToTier(index, entries)} aria-label={`${TIER_NAMES[index]}，${entries.length ? `中 ${entries.length} 注，跳到下一張中獎票` : "未中"}`} key={TIER_NAMES[index]}><b>{TIER_NAMES[index]}</b>{entries.length ? `${entries.length.toLocaleString("zh-HK")}注中` : "未中"}</button>; })}</div></div>{autoSummary && <button className="primary-action" onClick={closeAutoSummary}>完成</button>}</div>
     </DialogContent></Dialog>
     <footer><p>只供機率模擬及娛樂，並非真實投注服務。攪珠結果互相獨立，過往結果不會提高下期勝算。</p><p>只限年滿 18 歲人士。請理性娛樂。</p><p className="sound-credit">攪珠音效：<a href="https://soundbible.com/2199-Marbles.html" target="_blank" rel="noreferrer">Marbles — Daniel Simion</a>（CC BY 3.0）</p></footer>
+    <Dialog open={collectionOpen} onOpenChange={closeCollection}><DialogContent className="collection-dialog" style={{ "--draw-duration": `${cycleMs}ms` } as CSSProperties}><DialogHeader><DialogTitle>{replayWin ? "中獎回放" : "中獎收藏冊"}</DialogTitle><DialogDescription>{replayWin ? "按當時號碼及派彩重播，唔會新增投注或戰績。" : `${collection.length.toLocaleString("zh-HK")} 張中獎票・儲存於此瀏覽器`}</DialogDescription></DialogHeader>
+      {collectionError && <p className="update-notice" role="status">{collectionError}</p>}
+      {replayWin ? <div className="replay-detail">
+        <button className="text-button" onClick={() => { stopReplay(); setReplayWin(null); }}>← 返回收藏冊</button>
+        <p className="replay-period">第 {replayWin.drawNo} 期 · {replayWin.drawDate}</p>
+        <p className="section-kicker">當期攪珠結果</p><div className="replay-draw">{replayWin.numbers.map(n => <Ball key={n} number={n} small/>)}<b>+</b><Ball number={replayWin.extra} extra small/></div>
+        <p className="section-kicker">收藏注項</p><div className={`pick-row replay-ticket ${replayDrawing ? "drawing" : "winning"}`}><div className="pick-balls">{replayWin.pick.map(n => <Ball key={n} number={n} small extra={!replayDrawing && n === replayWin.extra} muted={!replayDrawing && !replayWin.numbers.includes(n) && n !== replayWin.extra}/>)}</div></div>
+        <div className="replay-result" aria-live="polite">{replayDrawing ? <span>號碼揭曉中…</span> : <><strong>{TIER_NAMES[replayWin.tier]}</strong><b>{money(replayWin.prize)}</b></>}</div>
+        <button className="primary-action full" disabled={replayDrawing} onClick={() => startReplay(replayWin)}><Play size={16}/> 再播一次</button>
+      </div> : <><div className="collection-list">{collection.length ? collection.slice(0, collectionLimit).map(win => <button className="collection-ticket" key={win.id} onClick={() => startReplay(win)} aria-label={`回放${TIER_NAMES[win.tier]}，第 ${win.drawNo} 期，${money(win.prize)}`}><span className="collection-ticket-heading"><strong>{TIER_NAMES[win.tier]}</strong><b>{money(win.prize)}</b></span><span className="collection-balls">{win.pick.map(n => <Ball key={n} number={n} small extra={n === win.extra} muted={!win.numbers.includes(n) && n !== win.extra}/>)}</span><span className="collection-ticket-meta"><span>第 {win.drawNo} 期 · {timeLabel(win.savedAt)}</span><Play size={16}/></span></button>) : <div className="collection-empty"><Trophy size={34}/><strong>未有中獎收藏</strong><p>之後中獎嘅注項會自動收藏。舊版只有累計數字，無法還原舊注項。</p></div>}</div>{collectionLimit < collection.length && <button className="secondary-action" onClick={() => setCollectionLimit(limit => limit + 20)}>顯示更多</button>}</>}
+    </DialogContent></Dialog>
     <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}><DialogContent className="settings-dialog"><DialogHeader><DialogTitle>播放與提示</DialogTitle><DialogDescription>設定只儲存於此瀏覽器。</DialogDescription></DialogHeader>
       <div className="settings-row"><span>注項顯示</span><Select value={density} onValueChange={value => { setDensity(value); savePlayback({ muted, speed, density: value }); }}><SelectTrigger aria-label="注項密度"><SelectValue/></SelectTrigger><SelectContent><SelectItem value="comfortable">舒適</SelectItem><SelectItem value="dense">密集</SelectItem></SelectContent></Select></div>
       <p className="setting-hint">各獎級開關同時控制中獎彈窗及自動投注底部方塊。</p>

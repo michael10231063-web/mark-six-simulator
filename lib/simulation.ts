@@ -1,6 +1,18 @@
 export type Wins = [number, number, number, number, number, number, number];
 export type Stats = { entries: number; cost: number; prize: number; wins: Wins };
 export type Ledger = { version: 2; legacy: Stats; draws: Record<string, Stats> };
+export type SavedWin = { id: string; savedAt: string; drawNo: string; drawDate: string; numbers: number[]; extra: number; pick: number[]; tier: number; prize: number };
+export function restoreWins(saved: string | null): SavedWin[] {
+  if (saved === null) return [];
+  const value: unknown = JSON.parse(saved);
+  if (!Array.isArray(value) || !value.every((w: SavedWin) => w && typeof w.id === 'string'
+    && typeof w.drawNo === 'string' && typeof w.drawDate === 'string' && Number.isFinite(Date.parse(w.savedAt))
+    && Array.isArray(w.numbers) && w.numbers.length === 6 && new Set([...w.numbers, w.extra]).size === 7
+    && Array.isArray(w.pick) && w.pick.length === 6 && new Set(w.pick).size === 6
+    && [...w.numbers, w.extra, ...w.pick].every(n => Number.isInteger(n) && n >= 1 && n <= 49)
+    && Number.isInteger(w.tier) && w.tier >= 0 && w.tier <= 6 && Number.isFinite(w.prize) && w.prize >= 0)) throw new Error('Invalid win collection');
+  return value;
+}
 export const emptyStats = (): Stats => ({ entries: 0, cost: 0, prize: 0, wins: [0, 0, 0, 0, 0, 0, 0] });
 export const emptyLedger = (): Ledger => ({ version: 2, legacy: emptyStats(), draws: {} });
 export function validStats(value: unknown): value is Stats {

@@ -41,3 +41,11 @@ test('incomplete dividends and duplicate balls do not become successful snapshot
  const duplicate = structuredClone(api); duplicate.data.lotteryDraws[0].drawResult.xDrawnNo='4';
  assert.throws(()=>normalizeOfficialResult(duplicate));
 });
+
+test('win collection keeps the original draw and dividend across reloads', async () => {
+ const { restoreWins } = await import('../lib/simulation.ts');
+ const win = { id:'test-win', savedAt:'2026-09-07T12:00:00.000Z', drawNo:'26/095', drawDate:'2026-08-29', numbers:[4,7,8,11,26,30], extra:42, pick:[4,7,8,20,21,22], tier:6, prize:40 };
+ assert.deepEqual(restoreWins(JSON.stringify([win])),[win]);
+ assert.deepEqual(restoreWins(null),[]);
+ assert.throws(()=>restoreWins(JSON.stringify([{...win,pick:[4,4,8,20,21,22]}])));
+});
