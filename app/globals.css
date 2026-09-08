@@ -165,3 +165,27 @@ footer { max-width: 1000px; margin: 0 auto; padding: 6px 22px 12px; text-align: 
 .draw-selector .text-button { justify-self:start; }
 .history-note { font-size:12px; line-height:1.6; color:var(--muted); margin:8px 0; }
 .result-source { color:var(--gold); font-size:12px; text-decoration:underline; }
+
+.auto-goal { display:grid; gap:8px; padding:12px 0; }
+.auto-goal label { font-size:14px; color:var(--muted); }
+.auto-goal [data-slot=select-trigger] { width:100%; min-height:44px; background:#142a45; }
+.hunt-action-dock { grid-template-columns:minmax(0,1fr) auto; }
+.auto-overlay.hunt-overlay { grid-template-columns:minmax(0,1fr); grid-template-rows:auto auto auto minmax(60px,1fr) auto; gap:10px; padding:max(12px,env(safe-area-inset-top)) max(12px,env(safe-area-inset-right)) max(10px,env(safe-area-inset-bottom)) max(12px,env(safe-area-inset-left)); }
+.hunt-header { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+.hunt-header h2 { font-size:19px; margin:4px 0; color:var(--ink); }
+.hunt-dashboard { position:relative; display:grid; gap:10px; border:1px solid var(--line); background:#102944; border-radius:16px; padding:12px; min-width:0; }
+.hunt-target { text-align:center; }.hunt-target>span { color:var(--muted); font-size:12px; }.hunt-target>div { display:flex; justify-content:center; align-items:center; gap:8px; margin-top:8px; }.hunt-target b { color:var(--gold); }
+.hunt-counter { text-align:center; display:grid; gap:4px; }.hunt-counter>span { color:var(--muted); font-size:12px; }.hunt-counter strong { font-size:clamp(30px,8vw,52px); line-height:1.1; color:var(--gold); font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }.hunt-counter small { font-size:14px; }
+.hunt-metrics { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; border-top:1px solid var(--line); padding-top:10px; }.hunt-metrics>div { display:grid; gap:5px; min-width:0; }.hunt-metrics span { color:var(--muted); font-size:12px; }.hunt-metrics b { font-size:14px; overflow-wrap:anywhere; font-variant-numeric:tabular-nums; }
+.hunt-controls { display:flex; justify-content:center; gap:8px; }.hunt-controls .control-button { min-height:38px!important; }
+.hunt-ticket-toolbar { display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap; min-width:0; }.hunt-ticket-toolbar>span { color:var(--muted); font-size:12px; }.hunt-ticket-toolbar>div,.hunt-ticket-toolbar form { display:flex; gap:5px; }.hunt-ticket-toolbar input { width:95px; min-width:0; font-size:14px; border:1px solid var(--line); border-radius:7px; padding:5px; background:#142a45; color:var(--ink); }.hunt-ticket-toolbar button { background:#1c3754; color:var(--ink); border:1px solid var(--line); border-radius:7px; min-height:34px; min-width:32px; font-size:13px; }
+.auto-ticket-grid.hunt-tickets { grid-row:auto; grid-column:auto; grid-template-columns:minmax(0,1fr); position:relative; }
+.hunt-tickets .auto-pick-card { flex-wrap:wrap; }.hunt-tickets .ticket-meta { flex-basis:100%; display:flex; justify-content:space-between; }.hunt-tickets .ticket-balls { flex-basis:100%; }
+.hunt-footer { margin:0; max-width:none; min-width:0; padding:0; display:grid; gap:7px; text-align:left; }.hunt-footer>p { margin:0; font-size:12px; color:var(--muted); line-height:1.4; }.hunt-footer .auto-live-hits { height:64px; }.hunt-footer .tier-jump { font-size:11px; }.hunt-footer .primary-action { width:100%; }
+.hunt-reveal { position:absolute; inset:0; z-index:1; background:#112a45f5; border-radius:inherit; display:flex; flex-direction:column; gap:18px; align-items:center; justify-content:center; color:var(--gold); }.hunt-reveal>div { display:flex; gap:10px; }
+.hunt-won .hunt-dashboard { border-color:var(--gold); box-shadow:inset 0 0 25px #f3c75e22; }.hunt-won .hunt-header h2 { color:var(--gold); }
+@media(min-width:860px) { .auto-overlay.hunt-overlay { padding:18px max(24px,env(safe-area-inset-right),calc((100vw - 1280px)/2)) 18px max(24px,env(safe-area-inset-left),calc((100vw - 1280px)/2)); }.hunt-dashboard { grid-template-columns:1fr 1fr; align-items:center; }.hunt-target { grid-column:1; grid-row:1; }.hunt-counter { grid-column:2; grid-row:1; }.hunt-metrics { grid-column:1; }.hunt-controls { grid-column:2; }.auto-ticket-grid.hunt-tickets { grid-template-columns:repeat(3,minmax(0,1fr)); } }
+@media(max-height:600px) and (min-width:600px) { .auto-overlay.hunt-overlay { gap:6px; padding-top:8px; padding-bottom:8px; }.hunt-dashboard { padding:7px; gap:5px; }.hunt-counter strong { font-size:28px; }.hunt-metrics { padding-top:5px; }.hunt-header h2 { font-size:17px; }.hunt-footer .auto-live-hits { height:48px; }.hunt-footer>p { display:none; }.hunt-controls .control-button { min-height:32px!important; }.hunt-footer .primary-action { min-height:32px; } }
+
+.hunt-footer .auto-live-hits { height:auto; min-height:64px; }.hunt-footer .tier-jump { min-height:52px; gap:3px; }.hunt-footer .tier-jump span { font-size:10px; overflow-wrap:anywhere; line-height:1.2; }
+@media(max-height:600px) and (min-width:600px) { .hunt-footer .auto-live-hits { min-height:48px; }.hunt-footer .tier-jump { min-height:36px; } }

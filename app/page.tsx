@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { CheckCircle2, Maximize2, RotateCcw, Square, Trophy, Wifi, WifiOff, X, Pause, Play, Volume2, VolumeX, Settings2, ArrowDown } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
+import { Ball } from "@/components/lottery-ball";
+import { JackpotHunt } from "@/components/jackpot-hunt";
 import { AutoBetDialogContent } from "@/components/auto-bet-dialog";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
@@ -28,11 +30,8 @@ const INITIAL_DRAWS = bundledHistory.draws as Draw[];
 const FALLBACK_DRAW = INITIAL_DRAWS[0];
 const TIER_NAMES = ["頭獎", "二獎", "三獎", "四獎", "五獎", "六獎", "七獎"];
 const TIER_RULES = ["6個正選", "5個正選＋特別號", "5個正選", "4個正選＋特別號", "4個正選", "3個正選＋特別號", "3個正選"];
-const RED = new Set([1, 2, 7, 8, 12, 13, 18, 19, 23, 24, 29, 30, 34, 35, 40, 45, 46]);
-const BLUE = new Set([3, 4, 9, 10, 14, 15, 20, 25, 26, 31, 36, 37, 41, 42, 47, 48]);
 const DRAW_CYCLE_MS = 1100;
 
-function ballColor(n: number) { return RED.has(n) ? "red" : BLUE.has(n) ? "blue" : "green"; }
 function money(value: number | null) { if (value === null) return "未有派彩"; return new Intl.NumberFormat("zh-HK", { style: "currency", currency: "HKD", maximumFractionDigits: 0 }).format(value); }
 function quickPick() {
   const pool = Array.from({ length: 49 }, (_, i) => i + 1);
@@ -48,9 +47,6 @@ function prizeTotal(wins: Wins, draw: Draw, stake: number) {
   return wins.reduce((sum, count, index) => sum + count * (draw.prizes.find((p) => p.tier === index + 1)?.dividend ?? 0) * (stake / 10), 0);
 }
 function wait(ms: number) { return new Promise<void>((resolve) => window.setTimeout(resolve, ms)); }
-function Ball({ number, extra = false, small = false, muted = false }: { number: number; extra?: boolean; small?: boolean; muted?: boolean }) {
-  return <span className={`ball ball-${ballColor(number)} ${extra ? "ball-extra" : ""} ${small ? "ball-small" : ""} ${muted ? "ball-muted" : ""}`}><span className="ball-number">{number}</span></span>;
-}
 function usePersistentStats(drawKey: string) {
   const [ledger, setLedger] = useState<Ledger>(emptyLedger);
   const [ready, setReady] = useState(false);
@@ -122,6 +118,7 @@ export default function Home() {
   const [winnerOpen, setWinnerOpen] = useState(false); const [lastWin, setLastWin] = useState<BetResult | null>(null);
   const [alertTiers, setAlertTiers] = useState<boolean[]>(DEFAULT_ALERT_TIERS); const [lastTriggeredTier, setLastTriggeredTier] = useState(-1);
   const [showFrozenDraw, setShowFrozenDraw] = useState(false); const [isDrawing, setIsDrawing] = useState(false);
+  const [autoGoal, setAutoGoal] = useState("count"); const [jackpotOpen, setJackpotOpen] = useState(false);
   const [autoMode, setAutoMode] = useState(false); const [autoTotal, setAutoTotal] = useState(100); const [autoFullscreen, setAutoFullscreen] = useState(true);
   const [autoRunning, setAutoRunning] = useState(false); const [autoTickets, setAutoTickets] = useState<AutoTicket[]>([]);
   const [autoProgress, setAutoProgress] = useState<AutoProgress>({ completed: 0, total: 100, cost: 0, prize: 0, wins: EMPTY_WINS });
@@ -305,7 +302,15 @@ export default function Home() {
     playSound(wins.some(Boolean) ? "coin" : "settle"); addResult({ entries, cost, prize, wins, label: "連續投注至中獎", picks: latest.picks });
     setIsDrawing(false); busyRef.current = false;
   }
+  async function startJackpotHunt() {
+    if (busyRef.current || loadingDraw || !statsReady || !collectionReady) return;
+    busyRef.current = true; setWinnerOpen(false); setLastPicks([]);
+    playSound("settle");
+    if (autoFullscreen && document.fullscreenEnabled && !document.fullscreenElement) await document.documentElement.requestFullscreen().catch(() => undefined);
+    setJackpotOpen(true);
+  }
   async function startAutoBet() {
+    if (autoGoal === "jackpot") { await startJackpotHunt(); return; }
     if (busyRef.current || loadingDraw || !statsReady || !collectionReady) return;
     busyRef.current = true;
     const requested = Math.max(10, Math.min(100_000, Math.round((Math.floor(autoTotal) || 10) / 10) * 10));
@@ -432,13 +437,14 @@ export default function Home() {
           <div className="draw-balls" aria-label={`攪珠結果 ${draw.numbers.join("、")}，特別號 ${draw.extra}`}>{draw.numbers.map((n) => <Ball key={n} number={n} />)}<span className="plus">+</span><Ball number={draw.extra} extra /></div><p className="draw-date">{draw.drawDate.replaceAll("-", "/")} · 特別號碼以金圈標示</p><p className="update-time">{loadingDraw ? "正在檢查最新資料…" : `資料檢查時間：${timeLabel(checkedAt)}`}</p>{updateNotice && <p className="update-notice" role="status">{updateNotice}</p>}<p className="history-note">已收錄 {draws.length} 期。切換期數會保留各期戰績。</p><p className="history-note">{officialUnavailable ? "官方接口暫未能使用，由東網提供後備更新。" : "已檢查結果來源。"} 開獎晚每 15 分鐘嘗試同步，其餘每 6 小時；重新載入只讀取網站已同步資料。</p>{draw.standardLowerPrizes && <p className="history-note">四至七獎以標準派彩模擬，中獎注數未提供。</p>}{draw.prizes.some(p => p.dividend === null) && <p className="update-notice">本期有獎級未有派彩，模擬中獎只計注數，獎金及淨結果不包含該部分。</p>}<a className="result-source" href={draw.source === "oncc" ? "https://win.on.cc/marksix/" : "https://bet.hkjc.com/ch/marksix/results"} target="_blank" rel="noreferrer">查看結果來源 ↗</a></div>
         <div className="ticket-panel">
           <div className="ticket-heading"><div><span className="section-kicker">隨機投注</span><strong>{lastLabel}</strong></div></div>
-          <div className="mode-content random-only"><div className="counter-row"><div><span>每批注數</span><p>每次以 5 注調整</p></div><div className="stepper"><button onClick={() => setQuickCount(Math.max(5, quickCount - 5))} aria-label="減少 5 注">−</button><strong>{quickCount}</strong><button onClick={() => setQuickCount(Math.min(100, quickCount + 5))} aria-label="增加 5 注">＋</button></div></div>
+          <div className="mode-content random-only">{(!autoMode || autoGoal === "count") && <div className="counter-row"><div><span>每批注數</span><p>每次以 5 注調整</p></div><div className="stepper"><button onClick={() => setQuickCount(Math.max(5, quickCount - 5))} aria-label="減少 5 注">−</button><strong>{quickCount}</strong><button onClick={() => setQuickCount(Math.min(100, quickCount + 5))} aria-label="增加 5 注">＋</button></div></div>}
             <label className="auto-toggle"><span><b>自動投注</b><small>按每批注數自動完成</small></span><Switch checked={autoMode} onCheckedChange={setAutoMode} aria-label="開啟自動投注" /></label>
-            {autoMode && <div className="auto-config"><label><span>總注數</span><div className="auto-total-control"><button type="button" onClick={() => setAutoTotal(Math.max(10, autoTotal - 10))} aria-label="減少 10 注">−</button><input type="number" inputMode="numeric" min={10} max={100000} step={10} value={autoTotal} onChange={(event) => setAutoTotal(Math.max(10, Math.min(100000, Math.floor(Number(event.target.value)) || 10)))} onBlur={() => setAutoTotal(Math.max(10, Math.min(100000, Math.round(autoTotal / 10) * 10)))} aria-label="自動投注總注數" /><button type="button" onClick={() => setAutoTotal(Math.min(100000, Math.round(autoTotal / 10) * 10 + 10))} aria-label="增加 10 注">＋</button></div></label><label className="fullscreen-option"><span><Maximize2 size={15} /> 全螢幕播放</span><Switch checked={autoFullscreen} onCheckedChange={setAutoFullscreen} aria-label="自動投注全螢幕" /></label></div>}
-            {playbackControls()}
-            <div className="last-picks">{lastPicks.length ? lastPicks.map((pick, i) => { const tier = classify(pick, draw); const drawing = isDrawing && !autoRunning; const winner = !drawing && tier >= 0; return <div className={`pick-row ${drawing ? "drawing" : winner ? "winning" : "losing"}`} key={`${pick.join("-")}-${i}`}><span className="pick-index">{i + 1}</span><div className="pick-balls">{pick.map((n) => <Ball key={n} number={n} small extra={winner && n === draw.extra} muted={winner && !draw.numbers.includes(n) && n !== draw.extra} />)}</div><em>{drawing ? "開彩中" : winner ? TIER_NAMES[tier] : "未中"}</em></div>; }) : <div className="empty-pick">{autoMode ? "按「開始自動」逐批揭曉號碼" : "按「投注一次」即時產生號碼"}</div>}</div>
+            {autoMode && <div className="auto-goal"><label id="auto-goal-label">自動投注目標</label><Select value={autoGoal} onValueChange={setAutoGoal}><SelectTrigger aria-labelledby="auto-goal-label"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="count">完成指定注數</SelectItem><SelectItem value="jackpot">直到首次中頭獎</SelectItem></SelectContent></Select>{autoGoal === "jackpot" && <p className="history-note">高速逐注模擬，可隨時暫停或停止；中頭獎時播放完整動畫。所有注項可分頁翻查，只收藏頭獎。</p>}</div>}
+            {autoMode && <div className="auto-config">{autoGoal === "count" && <label><span>總注數</span><div className="auto-total-control"><button type="button" onClick={() => setAutoTotal(Math.max(10, autoTotal - 10))} aria-label="減少 10 注">−</button><input type="number" inputMode="numeric" min={10} max={100000} step={10} value={autoTotal} onChange={(event) => setAutoTotal(Math.max(10, Math.min(100000, Math.floor(Number(event.target.value)) || 10)))} onBlur={() => setAutoTotal(Math.max(10, Math.min(100000, Math.round(autoTotal / 10) * 10)))} aria-label="自動投注總注數" /><button type="button" onClick={() => setAutoTotal(Math.min(100000, Math.round(autoTotal / 10) * 10 + 10))} aria-label="增加 10 注">＋</button></div></label>}<label className="fullscreen-option"><span><Maximize2 size={15} /> 全螢幕播放</span><Switch checked={autoFullscreen} onCheckedChange={setAutoFullscreen} aria-label="自動投注全螢幕" /></label></div>}
+            {(!autoMode || autoGoal === "count") && playbackControls()}
+            <div className="last-picks">{lastPicks.length ? lastPicks.map((pick, i) => { const tier = classify(pick, draw); const drawing = isDrawing && !autoRunning; const winner = !drawing && tier >= 0; return <div className={`pick-row ${drawing ? "drawing" : winner ? "winning" : "losing"}`} key={`${pick.join("-")}-${i}`}><span className="pick-index">{i + 1}</span><div className="pick-balls">{pick.map((n) => <Ball key={n} number={n} small extra={winner && n === draw.extra} muted={winner && !draw.numbers.includes(n) && n !== draw.extra} />)}</div><em>{drawing ? "開彩中" : winner ? TIER_NAMES[tier] : "未中"}</em></div>; }) : <div className="empty-pick">{autoMode ? autoGoal === "jackpot" ? "按「追頭獎」開始高速模擬" : "按「開始自動」逐批揭曉號碼" : "按「投注一次」即時產生號碼"}</div>}</div>
           </div>
-          <div className="action-dock"><div className="cost-preview"><span>{autoMode ? "自動投注總計" : "今次投注"}</span><strong>{(autoMode ? autoTotal : quickCount).toLocaleString("zh-HK")} 注 · {money((autoMode ? autoTotal : quickCount) * 10)}</strong></div><button className="secondary-action" disabled={isDrawing || autoRunning || loadingDraw || !statsReady || !collectionReady} onClick={autoMode ? placeBet : runUntilWin}>{autoMode ? "投注一批" : "連續至中獎"}</button><button className="primary-action" disabled={isDrawing || autoRunning || loadingDraw || !statsReady || !collectionReady} onClick={autoMode ? startAutoBet : placeBet}>{isDrawing ? "開彩中…" : autoMode ? "開始自動" : "投注一次"}</button></div>
+          <div className={`action-dock ${autoMode && autoGoal === "jackpot" ? "hunt-action-dock" : ""}`}><div className="cost-preview"><span>{autoMode ? "自動投注總計" : "今次投注"}</span><strong>{autoMode && autoGoal === "jackpot" ? "直到首次頭獎 · 高速模擬" : <>{(autoMode ? autoTotal : quickCount).toLocaleString("zh-HK")} 注 · {money((autoMode ? autoTotal : quickCount) * 10)}</>}</strong></div>{(!autoMode || autoGoal === "count") && <button className="secondary-action" disabled={isDrawing || autoRunning || loadingDraw || !statsReady || !collectionReady} onClick={autoMode ? placeBet : runUntilWin}>{autoMode ? "投注一批" : "連續至中獎"}</button>}<button className="primary-action" disabled={isDrawing || autoRunning || loadingDraw || !statsReady || !collectionReady} onClick={autoMode ? startAutoBet : placeBet}>{isDrawing ? "開彩中…" : autoMode ? autoGoal === "jackpot" ? "追頭獎" : "開始自動" : "投注一次"}</button></div>
         </div>
       </section>
       <aside className="stats-column">
@@ -447,6 +453,7 @@ export default function Home() {
         </div></section>
       </aside>
     </div>
+    {jackpotOpen && <JackpotHunt draw={draw} muted={muted} onMute={toggleMute} onSound={playSound} onAccount={addStats} onWin={win => collect([win])} onClose={() => { setJackpotOpen(false); busyRef.current = false; setLastPicks([]); setLastLabel("追頭獎模擬已結束"); }} />}
     <Dialog open={autoRunning || !!autoSummary} onOpenChange={open => { if (!open && !autoRunning) void closeAutoSummary(); }}><AutoBetDialogContent className={`auto-overlay density-${density}`} style={{ "--draw-duration": `${cycleMs}ms` } as CSSProperties} aria-label="自動投注" aria-describedby={undefined} onEscapeKeyDown={event => { if (autoRunning) event.preventDefault(); }}>
       <DialogTitle className="sr-only">自動投注</DialogTitle>
       <header className="auto-header"><div><span>AUTO DRAW</span><strong>{autoSummary && <CheckCircle2 size={17} />}{autoRunning ? stopping ? "正完成最後一批" : paused ? isDrawing ? "完成本批後暫停" : "自動投注已暫停" : "自動投注進行中" : autoSummary?.cancelled ? "自動投注已停止" : "自動投注完成"}</strong></div>{playbackControls(true)}<button disabled={stopping} onClick={autoRunning ? stopAutoBet : closeAutoSummary} aria-label={autoRunning ? "停止自動投注" : "關閉總結"}>{autoRunning ? <Square size={18} /> : <X size={21} />}</button></header>
