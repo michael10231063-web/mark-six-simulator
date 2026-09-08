@@ -189,3 +189,10 @@ footer { max-width: 1000px; margin: 0 auto; padding: 6px 22px 12px; text-align: 
 
 .hunt-footer .auto-live-hits { height:auto; min-height:64px; }.hunt-footer .tier-jump { min-height:52px; gap:3px; }.hunt-footer .tier-jump span { font-size:10px; overflow-wrap:anywhere; line-height:1.2; }
 @media(max-height:600px) and (min-width:600px) { .hunt-footer .auto-live-hits { min-height:48px; }.hunt-footer .tier-jump { min-height:36px; } }
+
+/* Select content is portalled outside themed panels: give it its own opaque surface. */
+[data-slot=select-content] { background-color:var(--popover); color:var(--popover-foreground); border:1px solid var(--input); box-shadow:0 16px 48px #0008; z-index:70; }
+[data-slot=select-item] { min-height:40px; }
+[data-slot=select-item][data-highlighted] { background-color:var(--secondary); color:var(--ink); }
+[data-slot=select-item][data-state=checked] { background-color:#304562; color:var(--gold); }
+[data-slot=select-scroll-up-button], [data-slot=select-scroll-down-button] { background-color:var(--popover); color:var(--ink); }
