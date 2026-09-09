@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties } from "re
 import { CheckCircle2, Maximize2, RotateCcw, Square, Trophy, Wifi, WifiOff, X, Pause, Play, Volume2, VolumeX, Settings2, ArrowDown } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { Ball } from "@/components/lottery-ball";
+import { ParallelDuel } from "@/components/parallel-duel";
 import { JackpotHunt } from "@/components/jackpot-hunt";
 import { AutoBetDialogContent } from "@/components/auto-bet-dialog";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -118,6 +119,7 @@ export default function Home() {
   const [winnerOpen, setWinnerOpen] = useState(false); const [lastWin, setLastWin] = useState<BetResult | null>(null);
   const [alertTiers, setAlertTiers] = useState<boolean[]>(DEFAULT_ALERT_TIERS); const [lastTriggeredTier, setLastTriggeredTier] = useState(-1);
   const [showFrozenDraw, setShowFrozenDraw] = useState(false); const [isDrawing, setIsDrawing] = useState(false);
+  const [duelOpen, setDuelOpen] = useState(false);
   const [autoGoal, setAutoGoal] = useState("count"); const [jackpotOpen, setJackpotOpen] = useState(false);
   const [autoMode, setAutoMode] = useState(false); const [autoTotal, setAutoTotal] = useState(100); const [autoFullscreen, setAutoFullscreen] = useState(true);
   const [autoRunning, setAutoRunning] = useState(false); const [autoTickets, setAutoTickets] = useState<AutoTicket[]>([]);
@@ -436,6 +438,7 @@ export default function Home() {
         <div ref={drawPanelRef} className="draw-panel"><div className="draw-selector"><label id="draw-selector-label">選擇攪珠期數</label><Select value={drawKey(draw)} onValueChange={selectDraw} disabled={loadingDraw || busyRef.current}><SelectTrigger aria-labelledby="draw-selector-label"><SelectValue /></SelectTrigger><SelectContent position="popper">{draws.map((item, index) => <SelectItem key={drawKey(item)} value={drawKey(item)}>第 {item.drawNo} 期 · {item.drawDate}{index === 0 ? "（最近已收錄）" : ""}</SelectItem>)}</SelectContent></Select>{drawKey(draw) !== drawKey(draws[0]) && <button className="text-button" disabled={loadingDraw || busyRef.current} onClick={() => selectDraw(drawKey(draws[0]))}>返回最近一期</button>}</div><div className="draw-meta"><div><span className="section-kicker">{drawKey(draw) === drawKey(draws[0]) ? "最近已收錄攪珠" : "歷史攪珠"}</span><strong>第 {draw.drawNo} 期</strong></div><div className={`source-pill ${draw.updatedFromOfficial ? "online" : "offline"}`}>{draw.updatedFromOfficial ? <Wifi size={13} /> : <WifiOff size={13} />}{draw.updatedFromOfficial ? "馬會核對資料" : draw.source === "oncc" ? "東網結果資料" : "已儲存資料"}</div></div>
           <div className="draw-balls" aria-label={`攪珠結果 ${draw.numbers.join("、")}，特別號 ${draw.extra}`}>{draw.numbers.map((n) => <Ball key={n} number={n} />)}<span className="plus">+</span><Ball number={draw.extra} extra /></div><p className="draw-date">{draw.drawDate.replaceAll("-", "/")} · 特別號碼以金圈標示</p><p className="update-time">{loadingDraw ? "正在檢查最新資料…" : `資料檢查時間：${timeLabel(checkedAt)}`}</p>{updateNotice && <p className="update-notice" role="status">{updateNotice}</p>}<p className="history-note">已收錄 {draws.length} 期。切換期數會保留各期戰績。</p><p className="history-note">{officialUnavailable ? "官方接口暫未能使用，由東網提供後備更新。" : "已檢查結果來源。"} 開獎晚每 15 分鐘嘗試同步，其餘每 6 小時；重新載入只讀取網站已同步資料。</p>{draw.standardLowerPrizes && <p className="history-note">四至七獎以標準派彩模擬，中獎注數未提供。</p>}{draw.prizes.some(p => p.dividend === null) && <p className="update-notice">本期有獎級未有派彩，模擬中獎只計注數，獎金及淨結果不包含該部分。</p>}<a className="result-source" href={draw.source === "oncc" ? "https://win.on.cc/marksix/" : "https://bet.hkjc.com/ch/marksix/results"} target="_blank" rel="noreferrer">查看結果來源 ↗</a></div>
         <div className="ticket-panel">
+          <button className="duel-launch" disabled={isDrawing || autoRunning || loadingDraw || jackpotOpen} onClick={() => { if (busyRef.current) return; busyRef.current = true; playSound("settle"); setDuelOpen(true); }}><span><b>平行宇宙對決</b><small>固定號碼 vs 每期換號 · 同期、同成本</small></span><span aria-hidden="true">↗</span></button>
           <div className="ticket-heading"><div><span className="section-kicker">隨機投注</span><strong>{lastLabel}</strong></div></div>
           <div className="mode-content random-only">{(!autoMode || autoGoal === "count") && <div className="counter-row"><div><span>每批注數</span><p>每次以 5 注調整</p></div><div className="stepper"><button onClick={() => setQuickCount(Math.max(5, quickCount - 5))} aria-label="減少 5 注">−</button><strong>{quickCount}</strong><button onClick={() => setQuickCount(Math.min(100, quickCount + 5))} aria-label="增加 5 注">＋</button></div></div>}
             <label className="auto-toggle"><span><b>自動投注</b><small>按每批注數自動完成</small></span><Switch checked={autoMode} onCheckedChange={setAutoMode} aria-label="開啟自動投注" /></label>
@@ -453,6 +456,7 @@ export default function Home() {
         </div></section>
       </aside>
     </div>
+    {duelOpen && <ParallelDuel draws={draws} end={draw} muted={muted} onMute={toggleMute} onSound={playSound} onClose={() => { setDuelOpen(false); busyRef.current = false; }} />}
     {jackpotOpen && <JackpotHunt draw={draw} muted={muted} onMute={toggleMute} onSound={playSound} onAccount={addStats} onWin={win => collect([win])} onClose={() => { setJackpotOpen(false); busyRef.current = false; setLastPicks([]); setLastLabel("追頭獎模擬已結束"); }} />}
     <Dialog open={autoRunning || !!autoSummary} onOpenChange={open => { if (!open && !autoRunning) void closeAutoSummary(); }}><AutoBetDialogContent className={`auto-overlay density-${density}`} style={{ "--draw-duration": `${cycleMs}ms` } as CSSProperties} aria-label="自動投注" aria-describedby={undefined} onEscapeKeyDown={event => { if (autoRunning) event.preventDefault(); }}>
       <DialogTitle className="sr-only">自動投注</DialogTitle>

@@ -1,0 +1,9 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {buildDuel,duelHistory,duelTotals,duelVerdict,ticketAt} from '../lib/jackpot-engine.ts';
+const seed=[12,34,56,78];
+const make=(day,numbers=ticketAt(seed,day))=>({drawNo:`26/${day}`,drawDate:`2026-01-${String(day).padStart(2,'0')}`,numbers,extra:Array.from({length:49},(_,i)=>i+1).find(n=>!numbers.includes(n)),prizes:Array.from({length:7},(_,i)=>({tier:i+1,dividend:1000/(i+1)}))});
+test('history ends at selected draw and plays oldest to newest without mutating input',()=>{const draws=[make(4),make(1),make(3),make(2)];assert.deepEqual(duelHistory(draws,make(3),2).map(d=>d.drawNo),['26/2','26/3']);assert.equal(draws[0].drawNo,'26/4');});
+test('both universes have identical first ticket, fixed stays fixed and random follows its stream',()=>{const rows=buildDuel([make(1),make(2),make(3)],seed);assert.deepEqual(rows[0].fixed.pick,rows[0].random.pick);assert.deepEqual(rows[2].fixed.pick,rows[0].fixed.pick);assert.deepEqual(rows[2].random.pick,ticketAt(seed,3));assert.notDeepEqual(rows[1].fixed.pick,rows[1].random.pick);assert.equal(duelTotals(rows,'fixed').cost,30);assert.equal(duelTotals(rows,'random').cost,30);});
+test('each period uses its own dividend and replay totals cannot double count',()=>{const draws=[make(1),make(2,ticketAt(seed,1))];draws[1].prizes[0].dividend=2000;const rows=buildDuel(draws,seed);assert.equal(duelTotals(rows,'fixed').prize,3000);assert.deepEqual(duelTotals(rows,'fixed'),duelTotals(rows,'fixed'));assert.equal(duelTotals(rows.slice(0,1),'fixed').prize,1000);});
+test('missing winning dividend is unknown and does not announce a false winner',()=>{const draw=make(1);draw.prizes[0].dividend=null;const rows=buildDuel([draw],seed);assert.equal(duelTotals(rows,'fixed').unpriced,1);assert.equal(duelVerdict(rows),'unpriced');assert.equal(duelVerdict(buildDuel([make(1)],seed)),'tie');});

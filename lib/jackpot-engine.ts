@@ -37,3 +37,29 @@ export function simulateChunk(seed: Seed, draw: HuntDraw, start: number, count: 
   }
   return {entries,cost:entries*10,prize,unpricedEntries,wins,hits,won:wins[0]>0};
 }
+
+export type DuelDraw = HuntDraw & {drawNo:string;drawDate:string;standardLowerPrizes?:boolean};
+export type DuelTicket = {pick:number[];tier:number;prize:number|null};
+export type DuelRound = {draw:DuelDraw;fixed:DuelTicket;random:DuelTicket};
+export function duelHistory(draws:DuelDraw[], end:DuelDraw, count:number):DuelDraw[] {
+  return [...draws].filter(d=>d.drawDate<end.drawDate||(d.drawDate===end.drawDate&&d.drawNo<=end.drawNo))
+    .sort((a,b)=>a.drawDate.localeCompare(b.drawDate)||a.drawNo.localeCompare(b.drawNo)).slice(-Math.max(1,Math.trunc(count)));
+}
+export function buildDuel(draws:DuelDraw[],seed:Seed):DuelRound[] {
+  const fixed=ticketAt(seed,1);
+  const settle=(pick:number[],draw:DuelDraw):DuelTicket=>{
+    const tier=ticketTier(pick,draw.numbers,draw.extra);
+    return {pick:[...pick],tier,prize:tier<0?0:draw.prizes.find(p=>p.tier===tier+1)?.dividend??null};
+  };
+  return draws.map((draw,i)=>({draw,fixed:settle(fixed,draw),random:settle(ticketAt(seed,i+1),draw)}));
+}
+export function duelTotals(rounds:DuelRound[],side:'fixed'|'random') {
+  const wins=[0,0,0,0,0,0,0];let prize=0,unpriced=0;
+  for(const round of rounds){const ticket=round[side];if(ticket.tier>=0)wins[ticket.tier]++;if(ticket.prize===null)unpriced++;else prize+=ticket.prize;}
+  return {entries:rounds.length,cost:rounds.length*10,prize,unpriced,wins,net:prize-rounds.length*10};
+}
+export function duelVerdict(rounds:DuelRound[]) {
+  const a=duelTotals(rounds,'fixed'),b=duelTotals(rounds,'random');
+  if(a.unpriced||b.unpriced)return 'unpriced';
+  return a.prize===b.prize?'tie':a.prize>b.prize?'fixed':'random';
+}
